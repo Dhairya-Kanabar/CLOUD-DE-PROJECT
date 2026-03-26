@@ -6,118 +6,129 @@ from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue import DynamicFrame
 import boto3
-import os
 
-# Specify your S3 bucket and path
+# -----------------------------
+# CONFIG
+# -----------------------------
 bucket_name = 'project-de-datewithdata-dhairya'
 prefix = 'warehouse/'
 
-# Initialize S3 client
 s3 = boto3.client('s3')
 
+# -----------------------------
+# SAFE UNION FUNCTION (NO COUNT)
+# -----------------------------
+def sparkUnion(glueContext, mapping, transformation_ctx):
+    dfs = [frame.toDF() for frame in mapping.values()]
+    
+    if len(dfs) == 0:
+        raise Exception("No dataframes to union")
 
-def sparkUnion(glueContext, unionType, mapping, transformation_ctx) -> DynamicFrame:
-    # Check if any of the frames in the mapping is empty
-    if any(frame.count() == 0 for alias, frame in mapping.items()):
-        # If any frame is empty, return the non-empty frame
-        non_empty_frame = next(frame for alias, frame in mapping.items() if frame.count() > 0)
-        return non_empty_frame
-    else:
-        # All frames are non-empty, perform the union
-        for alias, frame in mapping.items():
-            frame.toDF().createOrReplaceTempView(alias)
-        result = spark.sql(
-            "(select * from {}) UNION {} (select * from {})".format(*mapping.keys())
-        )
-        return DynamicFrame.fromDF(result, glueContext, transformation_ctx)
+    result = dfs[0]
+    for df in dfs[1:]:
+        result = result.unionByName(df, allowMissingColumns=True)
 
+    return DynamicFrame.fromDF(result, glueContext, transformation_ctx)
 
+# -----------------------------
+# INIT
+# -----------------------------
 args = getResolvedOptions(sys.argv, ["JOB_NAME"])
+
 sc = SparkContext()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
+
 job = Job(glueContext)
 job.init(args["JOB_NAME"], args)
 
-# Script  for node Mark
-Mark_node1704390766767 = glueContext.create_dynamic_frame.from_options(
-    format_options={"quoteChar": '"', "withHeader": True, "separator": ","},
+# -----------------------------
+# READ DATA
+# -----------------------------
+print("Reading Mark Data...")
+mark_df = glueContext.create_dynamic_frame.from_options(
+    format_options={"quoteChar": '"', "withHeader": True},
     connection_type="s3",
     format="csv",
     connection_options={
-        "paths": ["s3://project-de-datewithdata/staging/mark/"],
+        "paths": ["s3://project-de-datewithdata-dhairya/staging/mark/"],
         "recurse": True,
-    },
-    transformation_ctx="Mark_node1704390766767",
+    }
 )
-print("Read Mark Data")
 
-
-# Script for node Student
-Student_node1704390766920 = glueContext.create_dynamic_frame.from_options(
-    format_options={"quoteChar": '"', "withHeader": True, "separator": ","},
+print("Reading Student Data...")
+student_df = glueContext.create_dynamic_frame.from_options(
+    format_options={"quoteChar": '"', "withHeader": True},
     connection_type="s3",
     format="csv",
     connection_options={
-        "paths": ["s3://project-de-datewithdata/staging/student/"],
+        "paths": ["s3://project-de-datewithdata-dhairya/staging/student/"],
         "recurse": True,
-    },
-    transformation_ctx="Student_node1704390766920",
+    }
 )
-print("Read Student Data")
 
-# Script for node DW
-DW_node1704390869493 = glueContext.create_dynamic_frame.from_options(
-    format_options={"quoteChar": '"', "withHeader": True, "separator": ","},
+print("Reading Existing Warehouse Data...")
+dw_df = glueContext.create_dynamic_frame.from_options(
+    format_options={"quoteChar": '"', "withHeader": True},
     connection_type="s3",
     format="csv",
     connection_options={
-        "paths": ["s3://project-de-datewithdata/warehouse/"],
+        "paths": ["s3://project-de-datewithdata-dhairya/warehouse/"],
         "recurse": True,
-    },
-    transformation_ctx="DW_node1704390869493",
+    }
 )
-print("Read DW Data")
 
-# Script  for node Join
-Join_node1704390823387 = Join.apply(
-    frame1=Mark_node1704390766767,
-    frame2=Student_node1704390766920,
+# -----------------------------
+# TRANSFORM (JOIN)
+# -----------------------------
+print("Performing Join...")
+joined_df = Join.apply(
+    frame1=mark_df,
+    frame2=student_df,
     keys1=["student_id"],
-    keys2=["id"],
-    transformation_ctx="Join_node1704390823387",
+    keys2=["id"]
 )
-print("Join Sucessful")
 
-# Script  for node Union
-Union_node1704390896227 = sparkUnion(
+# -----------------------------
+# UNION (MERGE WITH OLD DATA)
+# -----------------------------
+print("Performing Union...")
+final_df = sparkUnion(
     glueContext,
-    unionType="ALL",
-    mapping={"source1": Join_node1704390823387, "source2": DW_node1704390869493},
-    transformation_ctx="Union_node1704390896227",
+    mapping={
+        "new_data": joined_df,
+        "old_data": dw_df
+    },
+    transformation_ctx="final_union"
 )
 
-print("Union Sucessful")
+# -----------------------------
+# SAFE DELETE (FIXED BUG)
+# -----------------------------
+print("Cleaning old warehouse data...")
+response = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
 
-# List all objects in the specified S3 path
-objects = s3.list_objects(Bucket=bucket_name, Prefix=prefix)['Contents']
+if 'Contents' in response:
+    for obj in response['Contents']:
+        s3.delete_object(Bucket=bucket_name, Key=obj['Key'])
+    print("Old files deleted")
+else:
+    print("No existing files to delete")
 
-# Delete each object
-for obj in objects:
-    s3.delete_object(Bucket=bucket_name, Key=obj['Key'])
-print("Delete existing files") 
-    
-
-AmazonS3_node1704390958322 = glueContext.write_dynamic_frame.from_options(
-    frame=Union_node1704390896227,
+# -----------------------------
+# WRITE OUTPUT
+# -----------------------------
+print("Writing final data to S3...")
+glueContext.write_dynamic_frame.from_options(
+    frame=final_df,
     connection_type="s3",
     format="glueparquet",
     connection_options={
-        "path": "s3://project-de-datewithdata/warehouse/",
-        "partitionKeys": [],
+        "path": "s3://project-de-datewithdata-dhairya/warehouse/",
+        "partitionKeys": []
     },
-    format_options={"compression": "snappy"},
-    transformation_ctx="AmazonS3_node1704390958322",
+    format_options={"compression": "snappy"}
 )
-print("Save the data")
+
+print("Job Completed Successfully")
 job.commit()
