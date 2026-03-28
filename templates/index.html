@@ -4,29 +4,31 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SCHOOL</title>
+
+    <!-- FIXED STATIC PATH -->
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
+
 <body>
 <div class="wrapper">
-    <form method="GET" action="{{url_for('save_data')}}">
-        <div id="wizard">
-            <h4 class="text-center">FORM</h4>
-            <section>
-                <div class="form-row">
-                    <input type="text" class="form-control" placeholder="Reg No" name="regno">
-                </div>
-                <div class="form-row"> <input type="text" class="form-control" placeholder="Name" name="name"> </div>
-                <div class="form-row"> <input type="text" class="form-control" placeholder="Class" name="class"> </div>
-                <div class="form-row"> <input type="text" class="form-control" placeholder="Math" name="math"> </div>
-                <div class="form-row"> <input type="text" class="form-control" placeholder="English" name="english"> </div>
-                <div class="form-row"> <input type="text" class="form-control" placeholder="Science" name="science"> </div>
-                <div class="form-row"> <input type="text" class="form-control" placeholder="Computer" name="computer"> </div>
-            </section>
 
-            <button type="submit" class="btn-primary">Submit</button>
-        </div>
+    <form method="POST" action="{{ url_for('save_data') }}">
+
+        <h3>Student Form</h3>
+
+        <input type="text" name="regno" placeholder="Reg No" required><br>
+        <input type="text" name="name" placeholder="Name" required><br>
+        <input type="text" name="class" placeholder="Class" required><br>
+
+        <input type="text" name="math" placeholder="Math"><br>
+        <input type="text" name="english" placeholder="English"><br>
+        <input type="text" name="science" placeholder="Science"><br>
+        <input type="text" name="computer" placeholder="Computer"><br>
+
+        <button type="submit">Submit</button>
 
     </form>
+
 </div>
 </body>
 </html>
